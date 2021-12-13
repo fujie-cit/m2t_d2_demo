@@ -16,10 +16,13 @@ from detectron2.data import MetadataCatalog, DatasetCatalog
 from grid_feats import add_attribute_config, build_detection_test_loader_with_attributes
 import grid_feats
 
+import matplotlib.pyplot as plt
+
 class Detectron2Predictor:
     def __init__(self):
         self.cfg = get_cfg()
-        self.cfg.merge_from_file(DETECTRON2_MODEL_WEIGHTS_PATH)
+        add_attribute_config(self.cfg)
+        self.cfg.merge_from_file(DETECTRON2_CONFIG_FILE_PATH)
         # force the final residual block to have dilations 1
         self.cfg.MODEL.RESNETS.RES5_DILATION = 1
         self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.2  # set threshold for this model
@@ -39,19 +42,19 @@ class Detectron2Predictor:
 
             inputs = {"image": image, "height": height, "width": width}
             # predictions = predictor.model([inputs])[0]
-            images = predictor.model.preprocess_image([inputs])
-            features = predictor.model.backbone(images.tensor)
-            proposals, _ = predictor.model.proposal_generator(images, features)
-            # instances, _ = predictor.model.roi_heads(images, features, proposals)
-            box_features = [features[f] for f in predictor.model.roi_heads.in_features]
-            box_features = predictor.model.roi_heads.box_pooler(box_features, [x.proposal_boxes for x in proposals])
+            images = self.d2predictor.model.preprocess_image([inputs])
+            features = self.d2predictor.model.backbone(images.tensor)
+            proposals, _ = self.d2predictor.model.proposal_generator(images, features)
+            # instances, _ = self.d2predictor.model.roi_heads(images, features, proposals)
+            box_features = [features[f] for f in self.d2predictor.model.roi_heads.in_features]
+            box_features = self.d2predictor.model.roi_heads.box_pooler(box_features, [x.proposal_boxes for x in proposals])
             box_features_ = box_features
-            box_features = predictor.model.roi_heads.box_head(box_features)
-            predictions = predictor.model.roi_heads.box_predictor(box_features)
+            box_features = self.d2predictor.model.roi_heads.box_head(box_features)
+            predictions = self.d2predictor.model.roi_heads.box_predictor(box_features)
             obj_labels = predictions[0].argmax(dim=1)
-            attr_score = predictor.model.roi_heads.attribute_predictor(box_features, obj_labels)
+            attr_score = self.d2predictor.model.roi_heads.attribute_predictor(box_features, obj_labels)
             attr_score_softmax = torch.softmax(attr_score, dim=1)
-            pred_instances, idx = predictor.model.roi_heads.box_predictor.inference(predictions, proposals)
+            pred_instances, idx = self.d2predictor.model.roi_heads.box_predictor.inference(predictions, proposals)
             # pred_classes = pred_instances[0].pred_classes
             # pred_boxes = pred_instances[0].pred_boxes
             # pred_classes_score = pred_instances[0].scores
@@ -66,33 +69,56 @@ class Detectron2Predictor:
 
         return pred_instances[0], box_features_[idx[0], :, 0, 0]
 
-
-def visualize_d2_result(image, pred_instances, attr_thresh=0.1, class_thresh=0.0):
-    image = image[:, :, ::-1]
     
-    plt.figure(figsize=(12,12))
-    plt.imshow(image)
+VISUAL_GENOME_JSON_PATH = './datasets/visual_genome/annotations/visual_genome_test.json'
 
-    for i in range(len(pred_instances)):
-        inst = pred_instances[i]
-        if inst.scores <= class_thresh:
-            continue
-        bbox = inst.pred_boxes.tensor[0].cpu().numpy().astype(np.int32)
-        if bbox[0] == 0: bbox[0] = 1
-        if bbox[1] == 0: bbox[1] = 1
-        cls = class_catalog[inst.pred_classes]
-        if inst.attr_scores > attr_thresh:
-            cls = attribute_catalog[inst.pred_attrs] + " " + cls
-        plt.gca().add_patch(
-            plt.Rectangle((bbox[0], bbox[1]),
-                          bbox[2] - bbox[0],
-                          bbox[3] - bbox[1], fill=False,
-                          edgecolor='red', linewidth=2, alpha=0.5))
-        plt.gca().text(bbox[0], bbox[1] - 2,
-                       '%s' % (cls),
-                       bbox=dict(facecolor='blue', alpha=0.5),
-                       fontsize=10, color='white')
+class D2ResultVisualizer:
+    def __init__(self):
+        jt = json.load(open(VISUAL_GENOME_JSON_PATH))
+        class_catalog = [''] * len(jt['categories'])
+        for v in jt['categories']:
+            class_catalog[v['id']] = v['name']
+        attribute_catalog = [''] * len(jt['attCategories'])
+        for v in jt['attCategories']:
+            attribute_catalog[v['id']] = v['name']
+        
+        self.class_catalog = class_catalog
+        self.attribute_catalog = attribute_catalog
+        
+    def visualize(self, image, pred_instances, attr_thresh=0.1, class_thresh=0.0):
+        image = image[:, :, ::-1]
+    
 
+        plt.figure(figsize=(24, 8))
+        ax = plt.subplot(1, 2, 1)
+        ax.imshow(image)
+        ax.set_yticks([])
+        ax.set_xticks([])
+        
+        ax = plt.subplot(1, 2, 2)
+        ax.imshow(image)
+        ax.set_yticks([])
+        ax.set_xticks([])
+
+        for i in range(len(pred_instances)):
+            inst = pred_instances[i]
+            if inst.scores <= class_thresh:
+                continue
+            bbox = inst.pred_boxes.tensor[0].cpu().numpy().astype(np.int32)
+            if bbox[0] == 0: bbox[0] = 1
+            if bbox[1] == 0: bbox[1] = 1
+            cls = self.class_catalog[inst.pred_classes]
+            if inst.attr_scores > attr_thresh:
+                cls = self.attribute_catalog[inst.pred_attrs] + " " + cls
+            ax.add_patch(
+                plt.Rectangle((bbox[0], bbox[1]),
+                              bbox[2] - bbox[0],
+                              bbox[3] - bbox[1], fill=False,
+                              edgecolor='red', linewidth=2, alpha=0.5))
+            ax.text(bbox[0], bbox[1] - 2,
+                           '%s' % (cls),
+                           bbox=dict(facecolor='blue', alpha=0.5),
+                           fontsize=10, color='white')
 
 ###
 M2T_REPO_PATH =  "./meshed-memory-transformer"
@@ -100,7 +126,7 @@ if M2T_REPO_PATH not in sys.path:
     sys.path.append(M2T_REPO_PATH)
 
 VOCAB_FILE_PATH = './models/vocab_m2_transformer_sc_d2.pkl'
-MODEL_PARAM_PATH = './models/m2_transformer_sc_d2_last.pth'
+MODEL_PARAM_PATH = './models/m2_transformer_sc_d2_best.pth'
 
 from data import ImageDetectionsField, TextField, RawField
 from models.transformer import (
@@ -121,6 +147,9 @@ class M2TransformerD2:
         self.decoder = MeshedDecoder(len(self.text_field.vocab), 54, 3, self.text_field.vocab.stoi['<pad>'])
         self.model = Transformer(self.text_field.vocab.stoi['<bos>'], self.encoder, self.decoder)
         self.model = self.model.to(device)
+        data = torch.load(MODEL_PARAM_PATH)
+        self.model.load_state_dict(data['state_dict'])
+        
 
     def predict(self, feature, max_len=40, beam_size=30, out_size=2):
         if feature.ndim < 3:
@@ -128,9 +157,9 @@ class M2TransformerD2:
 
         with torch.no_grad():
             out, _ = self.model.beam_search(
-                feature.unsqueeze(0), 
+                feature, 
                 max_len=max_len,
-                eos_idx=text_field.vocab.stoi['<eos>'], 
+                eos_idx=self.text_field.vocab.stoi['<eos>'], 
                 beam_size=beam_size, 
                 out_size=out_size,
                 return_probs=False,
