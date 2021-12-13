@@ -1,0 +1,8 @@
+.ipynb_checkpoints/
+__pycache__/
+datasets/
+gdrive_download.sh
+grid-feats-vqa/
+meshed-memory-transformer/
+models/
+*~
